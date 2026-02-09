@@ -50,7 +50,7 @@ pub mod token;
 
 pub use ast::{
     Address, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, Scheme, SiteBlock,
-    Snippet,
+    Snippet, parse_address,
 };
 pub use formatter::format;
 pub use lexer::{LexError, LexErrorKind, tokenize};

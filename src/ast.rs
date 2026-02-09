@@ -158,7 +158,8 @@ impl fmt::Display for Argument {
 }
 
 /// Parse an address string into its components.
-pub(crate) fn parse_address(addr: &str) -> Address {
+#[must_use]
+pub fn parse_address(addr: &str) -> Address {
     let mut remaining = addr;
     let mut scheme = None;
 
