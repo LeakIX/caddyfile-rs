@@ -1,10 +1,53 @@
+use std::fmt;
+
 use crate::token::{Span, Token, TokenKind};
+
+/// Classifies a lexer error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LexErrorKind {
+    /// Unterminated double-quoted string.
+    UnterminatedString,
+    /// Unterminated backtick string.
+    UnterminatedBacktick,
+    /// Unterminated heredoc (closing marker never found).
+    UnterminatedHeredoc { marker: String },
+    /// Heredoc marker is empty (`<<` followed by whitespace).
+    EmptyHeredocMarker,
+    /// Byte that cannot start any token.
+    UnexpectedCharacter(char),
+}
+
+impl fmt::Display for LexErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnterminatedString => {
+                write!(f, "unterminated quoted string")
+            }
+            Self::UnterminatedBacktick => {
+                write!(f, "unterminated backtick string")
+            }
+            Self::UnterminatedHeredoc { marker } => {
+                write!(
+                    f,
+                    "unterminated heredoc, \
+                     expected closing marker: {marker}"
+                )
+            }
+            Self::EmptyHeredocMarker => {
+                write!(f, "empty heredoc marker")
+            }
+            Self::UnexpectedCharacter(ch) => {
+                write!(f, "unexpected character: {ch}")
+            }
+        }
+    }
+}
 
 /// Error produced during lexing.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{message} at line {}, column {}", span.line, span.column)]
+#[error("{kind} at line {}, column {}", span.line, span.column)]
 pub struct LexError {
-    pub message: String,
+    pub kind: LexErrorKind,
     pub span: Span,
 }
 
@@ -111,7 +154,6 @@ impl<'a> Lexer<'a> {
 
     const fn span(&self) -> Span {
         Span {
-            file: None,
             line: self.line,
             column: self.col,
         }
@@ -129,11 +171,7 @@ impl<'a> Lexer<'a> {
         Token {
             kind,
             text,
-            span: Span {
-                file: None,
-                line,
-                column: col,
-            },
+            span: Span { line, column: col },
         }
     }
 
@@ -173,7 +211,6 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::Comment,
             text,
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -190,9 +227,8 @@ impl<'a> Lexer<'a> {
             match self.peek() {
                 None => {
                     return Err(LexError {
-                        message: "unterminated quoted string".to_string(),
+                        kind: LexErrorKind::UnterminatedString,
                         span: Span {
-                            file: None,
                             line: start_line,
                             column: start_col,
                         },
@@ -252,7 +288,6 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::QuotedString,
             text: value,
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -269,9 +304,8 @@ impl<'a> Lexer<'a> {
             match self.peek() {
                 None => {
                     return Err(LexError {
-                        message: "unterminated backtick string".to_string(),
+                        kind: LexErrorKind::UnterminatedBacktick,
                         span: Span {
-                            file: None,
                             line: start_line,
                             column: start_col,
                         },
@@ -297,7 +331,6 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::BacktickString,
             text: value,
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -363,7 +396,6 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::EnvVar { name, default },
             text,
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -421,9 +453,8 @@ impl<'a> Lexer<'a> {
 
         if text.is_empty() {
             return Err(LexError {
-                message: format!("unexpected character: {}", char::from(self.input[start])),
+                kind: LexErrorKind::UnexpectedCharacter(char::from(self.input[start])),
                 span: Span {
-                    file: None,
                     line: start_line,
                     column: start_col,
                 },
@@ -434,7 +465,6 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::Word,
             text,
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -461,9 +491,8 @@ impl<'a> Lexer<'a> {
 
         if marker.is_empty() {
             return Err(LexError {
-                message: "empty heredoc marker".to_string(),
+                kind: LexErrorKind::EmptyHeredocMarker,
                 span: Span {
-                    file: None,
                     line: start_line,
                     column: start_col,
                 },
@@ -506,14 +535,10 @@ impl<'a> Lexer<'a> {
                     self.advance();
                 }
 
-                #[allow(clippy::redundant_clone)]
                 return Ok(Token {
-                    kind: TokenKind::Heredoc {
-                        marker: marker.clone(),
-                    },
+                    kind: TokenKind::Heredoc { marker },
                     text: content,
                     span: Span {
-                        file: None,
                         line: start_line,
                         column: start_col,
                     },
@@ -526,12 +551,8 @@ impl<'a> Lexer<'a> {
         }
 
         Err(LexError {
-            message: format!(
-                "unterminated heredoc, \
-                 expected closing marker: {marker}"
-            ),
+            kind: LexErrorKind::UnterminatedHeredoc { marker },
             span: Span {
-                file: None,
                 line: start_line,
                 column: start_col,
             },
@@ -633,7 +654,7 @@ mod tests {
         let result = tokenize("\"unclosed");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.message.contains("unterminated"));
+        assert_eq!(err.kind, LexErrorKind::UnterminatedString);
     }
 
     #[test]

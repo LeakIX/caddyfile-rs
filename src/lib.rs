@@ -49,10 +49,27 @@ pub mod parser;
 pub mod token;
 
 pub use ast::{
-    Address, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedMatcher, NamedRoute,
-    Scheme, SiteBlock, Snippet,
+    Address, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, Scheme, SiteBlock,
+    Snippet,
 };
 pub use formatter::format;
-pub use lexer::{LexError, tokenize};
-pub use parser::{ParseError, parse};
+pub use lexer::{LexError, LexErrorKind, tokenize};
+pub use parser::{ParseError, ParseErrorKind, parse};
 pub use token::{Span, Token, TokenKind};
+
+/// Unified error type covering both lexing and parsing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// A lexer error.
+    #[error("{0}")]
+    Lex(#[from] LexError),
+    /// A parser error.
+    #[error("{0}")]
+    Parse(#[from] ParseError),
+}
+
+/// Tokenize and parse a Caddyfile source string in one step.
+pub fn parse_str(input: &str) -> Result<Caddyfile, Error> {
+    let tokens = tokenize(input)?;
+    Ok(parse(&tokens)?)
+}

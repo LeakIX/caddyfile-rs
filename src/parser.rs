@@ -1,14 +1,43 @@
+use std::fmt;
+
 use crate::ast::{
-    Address, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, Scheme, SiteBlock,
-    Snippet,
+    self, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, SiteBlock, Snippet,
 };
 use crate::token::{Span, Token, TokenKind};
 
+/// Classifies a parser error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    /// Expected `{`, found something else or EOF.
+    ExpectedOpenBrace { found: Option<String> },
+    /// Expected `}`, found something else or EOF.
+    ExpectedCloseBrace { found: Option<String> },
+}
+
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExpectedOpenBrace { found: None } => {
+                write!(f, "expected '{{'")
+            }
+            Self::ExpectedOpenBrace { found: Some(t) } => {
+                write!(f, "expected '{{', got '{t}'")
+            }
+            Self::ExpectedCloseBrace { found: None } => {
+                write!(f, "expected '}}'")
+            }
+            Self::ExpectedCloseBrace { found: Some(t) } => {
+                write!(f, "expected '}}', got '{t}'")
+            }
+        }
+    }
+}
+
 /// Error produced during parsing.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{message} at line {}, column {}", span.line, span.column)]
+#[error("{kind} at line {}, column {}", span.line, span.column)]
 pub struct ParseError {
-    pub message: String,
+    pub kind: ParseErrorKind,
     pub span: Span,
 }
 
@@ -133,7 +162,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     // Handle comma-separated addresses
                     let text = token.text.trim_end_matches(',');
-                    addresses.push(parse_address(text));
+                    addresses.push(ast::parse_address(text));
                     self.pos += 1;
                 }
             }
@@ -293,13 +322,15 @@ impl<'a> Parser<'a> {
         self.skip_newlines_and_comments();
         if self.pos >= self.tokens.len() {
             return Err(ParseError {
-                message: "expected '{'".to_string(),
+                kind: ParseErrorKind::ExpectedOpenBrace { found: None },
                 span: self.eof_span(),
             });
         }
         if self.tokens[self.pos].kind != TokenKind::OpenBrace {
             return Err(ParseError {
-                message: format!("expected '{{', got '{}'", self.tokens[self.pos].text),
+                kind: ParseErrorKind::ExpectedOpenBrace {
+                    found: Some(self.tokens[self.pos].text.clone()),
+                },
                 span: self.tokens[self.pos].span.clone(),
             });
         }
@@ -311,13 +342,15 @@ impl<'a> Parser<'a> {
         self.skip_newlines_and_comments();
         if self.pos >= self.tokens.len() {
             return Err(ParseError {
-                message: "expected '}'".to_string(),
+                kind: ParseErrorKind::ExpectedCloseBrace { found: None },
                 span: self.eof_span(),
             });
         }
         if self.tokens[self.pos].kind != TokenKind::CloseBrace {
             return Err(ParseError {
-                message: format!("expected '}}', got '{}'", self.tokens[self.pos].text),
+                kind: ParseErrorKind::ExpectedCloseBrace {
+                    found: Some(self.tokens[self.pos].text.clone()),
+                },
                 span: self.tokens[self.pos].span.clone(),
             });
         }
@@ -326,62 +359,16 @@ impl<'a> Parser<'a> {
     }
 
     fn eof_span(&self) -> Span {
-        self.tokens.last().map_or(
-            Span {
-                file: None,
-                line: 1,
-                column: 1,
-            },
-            |last| last.span.clone(),
-        )
-    }
-}
-
-/// Parse an address string into its components.
-fn parse_address(addr: &str) -> Address {
-    let mut remaining = addr;
-    let mut scheme = None;
-
-    // Extract scheme
-    if let Some(rest) = remaining.strip_prefix("https://") {
-        scheme = Some(Scheme::Https);
-        remaining = rest;
-    } else if let Some(rest) = remaining.strip_prefix("http://") {
-        scheme = Some(Scheme::Http);
-        remaining = rest;
-    }
-
-    // Extract path
-    let (host_port, path) = remaining.find('/').map_or((remaining, None), |slash_pos| {
-        (
-            &remaining[..slash_pos],
-            Some(remaining[slash_pos..].to_string()),
-        )
-    });
-
-    // Extract port
-    let (host, port) = host_port.rfind(':').map_or_else(
-        || (host_port.to_string(), None),
-        |colon_pos| {
-            let potential_port = &host_port[colon_pos + 1..];
-            potential_port.parse::<u16>().map_or_else(
-                |_| (host_port.to_string(), None),
-                |p| (host_port[..colon_pos].to_string(), Some(p)),
-            )
-        },
-    );
-
-    Address {
-        scheme,
-        host,
-        port,
-        path,
+        self.tokens
+            .last()
+            .map_or(Span { line: 1, column: 1 }, |last| last.span.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Scheme;
     use crate::lexer::tokenize;
 
     fn parse_input(input: &str) -> Result<Caddyfile, ParseError> {
@@ -481,7 +468,7 @@ mod tests {
 
     #[test]
     fn address_parsing() {
-        let a = parse_address("https://example.com:443/api");
+        let a = ast::parse_address("https://example.com:443/api");
         assert_eq!(a.scheme, Some(Scheme::Https));
         assert_eq!(a.host, "example.com");
         assert_eq!(a.port, Some(443));
@@ -490,7 +477,7 @@ mod tests {
 
     #[test]
     fn address_simple() {
-        let a = parse_address("example.com");
+        let a = ast::parse_address("example.com");
         assert_eq!(a.scheme, None);
         assert_eq!(a.host, "example.com");
         assert_eq!(a.port, None);

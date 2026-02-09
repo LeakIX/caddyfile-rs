@@ -1,5 +1,5 @@
 use crate::ast::{
-    Address, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, SiteBlock, Snippet,
+    self, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, SiteBlock, Snippet,
 };
 
 impl Caddyfile {
@@ -54,7 +54,7 @@ impl SiteBlock {
     #[must_use]
     pub fn new(address: &str) -> Self {
         Self {
-            addresses: vec![parse_simple_address(address)],
+            addresses: vec![ast::parse_address(address)],
             directives: Vec::new(),
         }
     }
@@ -62,7 +62,7 @@ impl SiteBlock {
     /// Add another address to this site block.
     #[must_use]
     pub fn address(mut self, addr: &str) -> Self {
-        self.addresses.push(parse_simple_address(addr));
+        self.addresses.push(ast::parse_address(addr));
         self
     }
 
@@ -173,42 +173,6 @@ impl Directive {
     pub fn block(mut self, directives: Vec<Self>) -> Self {
         self.block = Some(directives);
         self
-    }
-}
-
-/// Parse a simple address string into an `Address`.
-fn parse_simple_address(addr: &str) -> Address {
-    let mut remaining = addr;
-    let mut scheme = None;
-
-    if let Some(rest) = remaining.strip_prefix("https://") {
-        scheme = Some(super::ast::Scheme::Https);
-        remaining = rest;
-    } else if let Some(rest) = remaining.strip_prefix("http://") {
-        scheme = Some(super::ast::Scheme::Http);
-        remaining = rest;
-    }
-
-    let (host_port, path) = remaining.find('/').map_or((remaining, None), |pos| {
-        (&remaining[..pos], Some(remaining[pos..].to_string()))
-    });
-
-    let (host, port) = host_port.rfind(':').map_or_else(
-        || (host_port.to_string(), None),
-        |pos| {
-            let potential = &host_port[pos + 1..];
-            potential.parse::<u16>().map_or_else(
-                |_| (host_port.to_string(), None),
-                |p| (host_port[..pos].to_string(), Some(p)),
-            )
-        },
-    );
-
-    Address {
-        scheme,
-        host,
-        port,
-        path,
     }
 }
 

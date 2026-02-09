@@ -1,7 +1,6 @@
 /// Source location for error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
-    pub file: Option<String>,
     pub line: usize,
     pub column: usize,
 }

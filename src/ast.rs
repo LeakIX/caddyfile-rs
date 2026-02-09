@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Complete Caddyfile document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caddyfile {
@@ -83,13 +85,6 @@ pub enum Argument {
     Heredoc { marker: String, content: String },
 }
 
-/// Named matcher definition: `@name { ... }` or `@name <matcher>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NamedMatcher {
-    pub name: String,
-    pub matchers: Vec<Directive>,
-}
-
 impl Argument {
     /// Return the inner value regardless of quoting style.
     #[must_use]
@@ -98,5 +93,102 @@ impl Argument {
             Self::Unquoted(s) | Self::Quoted(s) | Self::Backtick(s) => s,
             Self::Heredoc { content, .. } => content,
         }
+    }
+}
+
+impl fmt::Display for Scheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http => f.write_str("http"),
+            Self::Https => f.write_str("https"),
+        }
+    }
+}
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(scheme) = &self.scheme {
+            write!(f, "{scheme}://")?;
+        }
+        f.write_str(&self.host)?;
+        if let Some(port) = self.port {
+            write!(f, ":{port}")?;
+        }
+        if let Some(path) = &self.path {
+            f.write_str(path)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Matcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => f.write_str("*"),
+            Self::Path(p) => f.write_str(p),
+            Self::Named(n) => write!(f, "@{n}"),
+        }
+    }
+}
+
+impl fmt::Display for Argument {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unquoted(s) => f.write_str(s),
+            Self::Quoted(s) => {
+                f.write_str("\"")?;
+                for ch in s.chars() {
+                    match ch {
+                        '"' => f.write_str("\\\"")?,
+                        '\\' => f.write_str("\\\\")?,
+                        '\n' => f.write_str("\\n")?,
+                        '\t' => f.write_str("\\t")?,
+                        '\r' => f.write_str("\\r")?,
+                        _ => write!(f, "{ch}")?,
+                    }
+                }
+                f.write_str("\"")
+            }
+            Self::Backtick(s) => write!(f, "`{s}`"),
+            Self::Heredoc { marker, content } => {
+                write!(f, "<<{marker}\n{content}\n{marker}")
+            }
+        }
+    }
+}
+
+/// Parse an address string into its components.
+pub(crate) fn parse_address(addr: &str) -> Address {
+    let mut remaining = addr;
+    let mut scheme = None;
+
+    if let Some(rest) = remaining.strip_prefix("https://") {
+        scheme = Some(Scheme::Https);
+        remaining = rest;
+    } else if let Some(rest) = remaining.strip_prefix("http://") {
+        scheme = Some(Scheme::Http);
+        remaining = rest;
+    }
+
+    let (host_port, path) = remaining.find('/').map_or((remaining, None), |pos| {
+        (&remaining[..pos], Some(remaining[pos..].to_string()))
+    });
+
+    let (host, port) = host_port.rfind(':').map_or_else(
+        || (host_port.to_string(), None),
+        |pos| {
+            let potential = &host_port[pos + 1..];
+            potential.parse::<u16>().map_or_else(
+                |_| (host_port.to_string(), None),
+                |p| (host_port[..pos].to_string(), Some(p)),
+            )
+        },
+    );
+
+    Address {
+        scheme,
+        host,
+        port,
+        path,
     }
 }

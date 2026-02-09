@@ -2,7 +2,8 @@
 //! at `github.com/caddyserver/caddy/caddyconfig/caddyfile/`.
 
 use caddyfile_rs::{
-    Caddyfile, Directive, GlobalOptions, Matcher, SiteBlock, format, parse, tokenize,
+    Caddyfile, Directive, GlobalOptions, LexErrorKind, Matcher, ParseErrorKind, SiteBlock, format,
+    parse, parse_str, tokenize,
 };
 
 // -----------------------------------------------------------
@@ -212,7 +213,10 @@ fn parse_error_unclosed_brace() {
     let result = parse(&tokens);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("expected '}'"));
+    assert!(matches!(
+        err.kind,
+        ParseErrorKind::ExpectedCloseBrace { found: None }
+    ));
 }
 
 #[test]
@@ -225,30 +229,33 @@ fn parse_error_nested_unclosed() {
 
 #[test]
 fn lex_error_unterminated_quote() {
-    let result = tokenize("\"unclosed string");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("unterminated"));
+    let err = tokenize("\"unclosed string").unwrap_err();
+    assert_eq!(err.kind, LexErrorKind::UnterminatedString);
 }
 
 #[test]
 fn lex_error_unterminated_backtick() {
-    let result = tokenize("`unclosed backtick");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("unterminated"));
+    let err = tokenize("`unclosed backtick").unwrap_err();
+    assert_eq!(err.kind, LexErrorKind::UnterminatedBacktick);
 }
 
 #[test]
 fn lex_error_unterminated_heredoc() {
-    let result = tokenize("<<EOF\nhello\n");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("unterminated heredoc"));
+    let err = tokenize("<<EOF\nhello\n").unwrap_err();
+    assert!(matches!(err.kind, LexErrorKind::UnterminatedHeredoc { .. }));
 }
 
 #[test]
 fn lex_error_empty_heredoc_marker() {
-    let result = tokenize("<<\nhello\n");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("empty heredoc marker"));
+    let err = tokenize("<<\nhello\n").unwrap_err();
+    assert_eq!(err.kind, LexErrorKind::EmptyHeredocMarker);
+}
+
+#[test]
+fn parse_str_convenience() {
+    let cf = parse_str("example.com {\n\tlog\n}\n").unwrap();
+    assert_eq!(cf.sites.len(), 1);
+    assert_eq!(cf.sites[0].addresses[0].host, "example.com");
 }
 
 // -----------------------------------------------------------
