@@ -1644,3 +1644,426 @@ fn display_error_types() {
     let msg = parse_err.to_string();
     assert!(msg.contains("expected '}'"));
 }
+
+// -----------------------------------------------------------
+// AST fidelity: build → format → parse must yield the same
+// AST.  This verifies that the formatter writes every field
+// and the parser reads it all back.
+// -----------------------------------------------------------
+
+/// Helper: format an AST, parse it back, assert structural equality.
+fn assert_ast_roundtrip(original: &Caddyfile) {
+    let formatted = format(original);
+    let parsed = parse_str(&formatted).unwrap_or_else(|e| {
+        panic!(
+            "failed to re-parse formatted output: {e}\n\
+             --- formatted ---\n{formatted}"
+        )
+    });
+    assert_eq!(
+        *original, parsed,
+        "AST mismatch after format → parse round-trip\n\
+         --- formatted ---\n{formatted}"
+    );
+}
+
+#[test]
+fn ast_fidelity_simple_site() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .reverse_proxy("app:3000")
+            .log(),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_global_options() {
+    let cf = Caddyfile::new()
+        .global(GlobalOptions {
+            directives: vec![
+                Directive::new("email").arg("admin@example.com"),
+                Directive::new("admin").arg("off"),
+            ],
+        })
+        .site(SiteBlock::new("example.com").log());
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_global_with_nested_block() {
+    let cf = Caddyfile::new()
+        .global(GlobalOptions {
+            directives: vec![
+                Directive::new("email").arg("ops@example.com"),
+                Directive::new("servers").block(vec![
+                    Directive::new("protocols").arg("h1").arg("h2").arg("h3"),
+                ]),
+                Directive::new("log").block(vec![
+                    Directive::new("output").arg("stderr"),
+                    Directive::new("level").arg("ERROR"),
+                ]),
+            ],
+        })
+        .site(SiteBlock::new("example.com").log());
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_snippet() {
+    let cf = Caddyfile::new()
+        .snippet(Snippet {
+            name: "logging".to_string(),
+            directives: vec![Directive::new("log").block(vec![
+                Directive::new("output").arg("stderr"),
+                Directive::new("format").arg("console"),
+            ])],
+        })
+        .site(
+            SiteBlock::new("example.com")
+                .directive(Directive::new("import").arg("logging"))
+                .reverse_proxy("app:3000"),
+        );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_named_route() {
+    let cf = Caddyfile::new()
+        .named_route(NamedRoute {
+            name: "myauth".to_string(),
+            directives: vec![
+                Directive::new("basic_auth")
+                    .block(vec![Directive::new("admin").arg("$2a$14$hash")]),
+            ],
+        })
+        .site(
+            SiteBlock::new("admin.example.com")
+                .directive(Directive::new("invoke").arg("myauth"))
+                .reverse_proxy("admin:3001"),
+        );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_multiple_snippets_and_named_routes() {
+    let cf = Caddyfile::new()
+        .snippet(Snippet {
+            name: "compression".to_string(),
+            directives: vec![Directive::new("encode").arg("gzip").arg("zstd")],
+        })
+        .snippet(Snippet {
+            name: "security".to_string(),
+            directives: vec![Directive::new("header").block(vec![
+                Directive::new("X-Frame-Options").quoted_arg("DENY"),
+                Directive::new("-Server"),
+            ])],
+        })
+        .named_route(NamedRoute {
+            name: "auth".to_string(),
+            directives: vec![
+                Directive::new("basic_auth").block(vec![Directive::new("admin").arg("$hash")]),
+            ],
+        })
+        .site(
+            SiteBlock::new("example.com")
+                .directive(Directive::new("import").arg("compression"))
+                .directive(Directive::new("import").arg("security"))
+                .directive(Directive::new("invoke").arg("auth"))
+                .reverse_proxy("app:3000"),
+        );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_multi_address() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .address("www.example.com")
+            .address("https://example.org")
+            .log(),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_address_with_scheme_and_port() {
+    let cf =
+        Caddyfile::new().site(SiteBlock::new("https://example.com:8443").reverse_proxy("app:3000"));
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_bare_port_address() {
+    let cf = Caddyfile::new()
+        .site(SiteBlock::new(":8080").directive(Directive::new("respond").quoted_arg("hello")));
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_matcher_all() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("respond").matcher(Matcher::All).arg("200")),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_matcher_path() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com").directive(
+            Directive::new("respond")
+                .matcher(Matcher::Path("/health".to_string()))
+                .arg("200"),
+        ),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_matcher_named() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("@api").arg("path").arg("/api/*"))
+            .directive(
+                Directive::new("reverse_proxy")
+                    .matcher(Matcher::Named("api".to_string()))
+                    .arg("api:8080"),
+            ),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_quoted_arguments() {
+    let cf = Caddyfile::new().site(SiteBlock::new("example.com").directive(
+        Directive::new("header").block(vec![
+                Directive::new("X-Frame-Options").quoted_arg("DENY"),
+                Directive::new("X-Content-Type-Options").quoted_arg("nosniff"),
+                Directive::new("Strict-Transport-Security")
+                    .quoted_arg("max-age=31536000; includeSubDomains"),
+                Directive::new("Content-Security-Policy")
+                    .quoted_arg("default-src 'self'"),
+            ]),
+    ));
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_quoted_with_escapes() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("respond").quoted_arg("line1\nline2\ttab")),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_deep_nesting_three_levels() {
+    // Note: avoid bare /path args inside sub-blocks — the parser
+    // treats any token starting with / as a path matcher.
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com").directive(
+            Directive::new("handle")
+                .matcher(Matcher::Path("/api/*".to_string()))
+                .block(vec![Directive::new("route").block(vec![
+                    Directive::new("reverse_proxy").block(vec![
+                        Directive::new("to").arg("app:3000"),
+                        Directive::new("lb_policy").arg("round_robin"),
+                        Directive::new("health_interval").arg("10s"),
+                    ]),
+                ])]),
+        ),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_four_level_nesting() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com").directive(
+            Directive::new("handle")
+                .matcher(Matcher::Path("/api/*".to_string()))
+                .block(vec![Directive::new("route").block(vec![
+                    Directive::new("reverse_proxy").block(vec![
+                        Directive::new("transport").arg("http").block(vec![
+                            Directive::new("tls_insecure_skip_verify"),
+                            Directive::new("read_timeout").arg("30s"),
+                        ]),
+                        Directive::new("to").arg("backend:8080"),
+                    ]),
+                ])]),
+        ),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_mixed_block_and_nonblock_directives() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("encode").arg("gzip"))
+            .directive(Directive::new("header").block(vec![
+                Directive::new("X-Frame-Options").quoted_arg("DENY"),
+                Directive::new("-Server"),
+            ]))
+            .directive(Directive::new("tls").arg("internal"))
+            .directive(Directive::new("log").block(vec![Directive::new("output").arg("stderr")]))
+            .directive(Directive::new("reverse_proxy").arg("app:3000")),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_multiple_sites() {
+    let cf = Caddyfile::new()
+        .site(SiteBlock::new("a.com").reverse_proxy("app1:3000").log())
+        .site(SiteBlock::new("b.com").reverse_proxy("app2:3000").log())
+        .site(
+            SiteBlock::new("c.com")
+                .encode_gzip()
+                .reverse_proxy("app3:3000")
+                .log(),
+        );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_full_production_config() {
+    let cf = Caddyfile::new()
+        .global(GlobalOptions {
+            directives: vec![
+                Directive::new("email").arg("ops@example.com"),
+                Directive::new("acme_ca").arg("https://acme.example.com/directory"),
+                Directive::new("servers")
+                    .block(vec![Directive::new("protocols").arg("h1").arg("h2")]),
+            ],
+        })
+        .snippet(Snippet {
+            name: "security".to_string(),
+            directives: vec![Directive::new("header").block(vec![
+                Directive::new("X-Content-Type-Options").quoted_arg("nosniff"),
+                Directive::new("X-Frame-Options").quoted_arg("DENY"),
+                Directive::new("Referrer-Policy").quoted_arg("strict-origin-when-cross-origin"),
+            ])],
+        })
+        .snippet(Snippet {
+            name: "logging".to_string(),
+            directives: vec![Directive::new("log").block(vec![
+                Directive::new("output")
+                    .arg("file")
+                    .arg("/var/log/caddy/access.log")
+                    .block(vec![
+                        Directive::new("roll_size").arg("100MiB"),
+                        Directive::new("roll_keep").arg("10"),
+                    ]),
+                Directive::new("format")
+                    .arg("json")
+                    .block(vec![Directive::new("time_format").arg("iso8601")]),
+                Directive::new("level").arg("INFO"),
+            ])],
+        })
+        .named_route(NamedRoute {
+            name: "auth".to_string(),
+            directives: vec![
+                Directive::new("basic_auth")
+                    .block(vec![Directive::new("admin").arg("$2a$14$hash")]),
+            ],
+        })
+        .site(
+            SiteBlock::new("example.com")
+                .address("www.example.com")
+                .directive(Directive::new("import").arg("security"))
+                .directive(Directive::new("import").arg("logging"))
+                .directive(
+                    Directive::new("handle")
+                        .matcher(Matcher::Path("/api/*".to_string()))
+                        .block(vec![Directive::new("reverse_proxy").block(vec![
+                            Directive::new("to").arg("api1:8080"),
+                            Directive::new("to").arg("api2:8080"),
+                            Directive::new("lb_policy").arg("round_robin"),
+                        ])]),
+                )
+                .directive(Directive::new("handle").block(vec![
+                    Directive::new("root").matcher(Matcher::All).arg("/srv"),
+                    Directive::new("file_server"),
+                ])),
+        )
+        .site(
+            SiteBlock::new("admin.example.com")
+                .directive(Directive::new("import").arg("security"))
+                .directive(Directive::new("invoke").arg("auth"))
+                .reverse_proxy("admin:3001"),
+        );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_empty_caddyfile() {
+    let cf = Caddyfile::new();
+    // Empty caddyfile formats to just "\n", which parses back to empty
+    let formatted = format(&cf);
+    let parsed = parse_str(&formatted).unwrap();
+    assert_eq!(cf, parsed);
+}
+
+#[test]
+fn ast_fidelity_global_only() {
+    let cf = Caddyfile::new().global(GlobalOptions {
+        directives: vec![Directive::new("admin").arg("off")],
+    });
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_directive_no_args_no_block() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("log"))
+            .directive(Directive::new("file_server"))
+            .directive(Directive::new("encode")),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_directive_many_args() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("example.com")
+            .directive(Directive::new("tls").arg("internal"))
+            .directive(Directive::new("encode").arg("gzip").arg("zstd").arg("br"))
+            .directive(Directive::new("bind").arg("0.0.0.0").arg("::")),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+/// The parser treats any token starting with `/` as a path
+/// matcher. This means `tls /cert.pem /key.pem` produces a
+/// path matcher `/cert.pem` plus one argument `/key.pem` (also
+/// matched). This test documents that behavior.
+#[test]
+fn parser_treats_slash_prefix_as_path_matcher() {
+    let cf = parse_str("example.com {\n\ttls /cert.pem /key.pem\n}\n").unwrap();
+    let tls = &cf.sites[0].directives[0];
+    // First /path token becomes a matcher, not an argument
+    assert_eq!(tls.matcher, Some(Matcher::Path("/cert.pem".to_string())));
+    // Second /path token also becomes a matcher... no, it's after
+    // the matcher so it's an argument
+    assert_eq!(tls.arguments.len(), 1);
+    assert_eq!(tls.arguments[0].value(), "/key.pem");
+}
+
+#[test]
+fn ast_fidelity_empty_block() {
+    // Directive with an empty sub-block
+    let cf = Caddyfile::new()
+        .site(SiteBlock::new("example.com").directive(Directive::new("log").block(vec![])));
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_wildcard_address() {
+    let cf = Caddyfile::new().site(SiteBlock::new("*.example.com").reverse_proxy("app:3000"));
+    assert_ast_roundtrip(&cf);
+}
