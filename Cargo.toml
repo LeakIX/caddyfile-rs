@@ -1,0 +1,24 @@
+[package]
+name = "caddyfile-rs"
+version = "0.1.0"
+edition = "2024"
+authors = ["LeakIX <contact@leakix.net>"]
+license = "MIT"
+description = "Caddyfile lexer, parser, formatter, and builder for Caddy web server configuration files"
+repository = "https://github.com/LeakIX/caddyfile-rs"
+homepage = "https://github.com/LeakIX/caddyfile-rs"
+documentation = "https://docs.rs/caddyfile-rs"
+readme = "README.md"
+keywords = ["caddy", "caddyfile", "parser", "formatter", "web-server"]
+categories = ["config", "parser-implementations", "web-programming"]
+rust-version = "1.85"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+
+[dependencies]
+thiserror = "2.0"
+
+[dev-dependencies]
