@@ -1,0 +1,25 @@
+name: Validate Caddyfile
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate Caddyfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build caddyfile CLI
+        run: cargo build --release
+      - name: Validate sample Caddyfile
+        run: ./target/release/caddyfile validate testdata/Caddyfile
+      - name: Check formatting
+        run: ./target/release/caddyfile check testdata/Caddyfile

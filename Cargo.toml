@@ -13,6 +13,10 @@ keywords = ["caddy", "caddyfile", "parser", "formatter", "web-server"]
 categories = ["config", "parser-implementations", "web-programming"]
 rust-version = "1.85"
 
+[[bin]]
+name = "caddyfile"
+path = "src/main.rs"
+
 [lints.clippy]
 all = "deny"
 pedantic = "deny"
