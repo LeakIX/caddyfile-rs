@@ -1,3 +1,7 @@
+//! Builder-pattern methods for constructing Caddyfile AST nodes.
+//!
+//! Provides a fluent API for programmatically building a Caddyfile.
+
 use crate::ast::{
     self, Argument, Caddyfile, Directive, GlobalOptions, Matcher, NamedRoute, SiteBlock, Snippet,
 };

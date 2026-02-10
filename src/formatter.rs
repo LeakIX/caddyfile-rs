@@ -1,3 +1,7 @@
+//! Pretty-printer that serializes a Caddyfile AST back into canonical text.
+//!
+//! Produces tab-indented output with consistent spacing between blocks.
+
 use crate::ast::{Address, Caddyfile, Directive, GlobalOptions, NamedRoute, SiteBlock, Snippet};
 
 /// Format a `Caddyfile` AST into a valid Caddyfile string.

@@ -23,3 +23,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Proptest regressions
+*.proptest-regressions

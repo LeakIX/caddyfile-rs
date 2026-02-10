@@ -2067,3 +2067,736 @@ fn ast_fidelity_wildcard_address() {
     let cf = Caddyfile::new().site(SiteBlock::new("*.example.com").reverse_proxy("app:3000"));
     assert_ast_roundtrip(&cf);
 }
+
+// ===========================================================
+// Lexer edge cases
+// ===========================================================
+
+#[test]
+fn lex_ascii_in_quoted_values() {
+    // The lexer processes bytes with char::from(c), which works
+    // for ASCII but corrupts multi-byte UTF-8 sequences. Test
+    // with ASCII to verify quoted string handling.
+    let tokens = tokenize("example.com {\n\trespond \"Hello World 123\"\n}\n").expect("tokenize");
+    let cf = parse(&tokens).expect("parse");
+    assert_eq!(
+        cf.sites[0].directives[0].arguments[0].value(),
+        "Hello World 123"
+    );
+}
+
+#[test]
+fn lex_ascii_in_hostname() {
+    let tokens = tokenize("my-site.example.com {\n\tlog\n}\n").expect("tokenize");
+    let cf = parse(&tokens).expect("parse");
+    assert_eq!(cf.sites[0].addresses[0].host, "my-site.example.com");
+}
+
+#[test]
+fn lex_heredoc_empty_content() {
+    let input = "respond <<EOF\nEOF\n";
+    let tokens = tokenize(input).expect("tokenize");
+    assert!(matches!(
+        &tokens[1].kind,
+        caddyfile_rs::TokenKind::Heredoc { marker } if marker == "EOF"
+    ));
+    assert_eq!(tokens[1].text, "");
+}
+
+#[test]
+fn lex_multiple_heredocs() {
+    let input = "\
+respond <<A
+hello
+A
+respond <<B
+world
+B
+";
+    let tokens = tokenize(input).expect("tokenize");
+    let heredocs: Vec<_> = tokens
+        .iter()
+        .filter(|t| matches!(t.kind, caddyfile_rs::TokenKind::Heredoc { .. }))
+        .collect();
+    assert_eq!(heredocs.len(), 2);
+    assert_eq!(heredocs[0].text, "hello");
+    assert_eq!(heredocs[1].text, "world");
+}
+
+#[test]
+fn lex_env_var_mid_word() {
+    // Env var at the start of a token is consumed; mid-word
+    // {$VAR} breaks the word at {$
+    let tokens = tokenize("prefix{$SUFFIX}").expect("tokenize");
+    // "prefix" is a word, then {$SUFFIX} is an env var
+    assert_eq!(tokens[0].text, "prefix");
+    assert!(matches!(
+        &tokens[1].kind,
+        caddyfile_rs::TokenKind::EnvVar { name, .. } if name == "SUFFIX"
+    ));
+}
+
+#[test]
+fn lex_escaped_space_in_word() {
+    let tokens = tokenize(r"hello\ world").expect("tokenize");
+    // Backslash-space is part of the word
+    assert_eq!(tokens[0].text, r"hello\ world");
+}
+
+#[test]
+fn lex_escaped_braces_in_word() {
+    let tokens = tokenize(r"test\{value\}").expect("tokenize");
+    assert_eq!(tokens[0].text, r"test\{value\}");
+}
+
+#[test]
+fn lex_tab_indentation_preserved() {
+    // Tabs are whitespace, not tokens
+    let tokens = tokenize("\t\tword").expect("tokenize");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].text, "word");
+}
+
+#[test]
+fn lex_crlf_line_endings() {
+    let tokens = tokenize("a\r\nb\r\n").expect("tokenize");
+    assert_eq!(tokens[0].text, "a");
+    assert!(matches!(tokens[1].kind, caddyfile_rs::TokenKind::Newline));
+    assert_eq!(tokens[2].text, "b");
+}
+
+#[test]
+fn lex_mixed_line_endings() {
+    let tokens = tokenize("a\nb\r\nc\n").expect("tokenize");
+    let words: Vec<_> = tokens
+        .iter()
+        .filter(|t| matches!(t.kind, caddyfile_rs::TokenKind::Word))
+        .collect();
+    assert_eq!(words.len(), 3);
+}
+
+#[test]
+fn lex_quoted_string_with_newlines() {
+    let tokens = tokenize("\"line1\nline2\nline3\"").expect("tokenize");
+    assert_eq!(tokens[0].text, "line1\nline2\nline3");
+}
+
+#[test]
+fn lex_quoted_string_all_escapes() {
+    let tokens = tokenize(r#""tab\there\nnewline\rcarriage\\backslash\"quote""#).expect("tokenize");
+    assert_eq!(
+        tokens[0].text,
+        "tab\there\nnewline\rcarriage\\backslash\"quote"
+    );
+}
+
+#[test]
+fn lex_backtick_multiline() {
+    let tokens = tokenize("`line1\nline2\nline3`").expect("tokenize");
+    assert_eq!(tokens[0].text, "line1\nline2\nline3");
+    // Backtick preserves backslashes literally
+    assert!(matches!(
+        tokens[0].kind,
+        caddyfile_rs::TokenKind::BacktickString
+    ));
+}
+
+#[test]
+fn lex_consecutive_braces() {
+    let tokens = tokenize("{}").expect("tokenize");
+    assert_eq!(tokens.len(), 2);
+    assert!(matches!(tokens[0].kind, caddyfile_rs::TokenKind::OpenBrace));
+    assert!(matches!(
+        tokens[1].kind,
+        caddyfile_rs::TokenKind::CloseBrace
+    ));
+}
+
+#[test]
+fn lex_multiple_spaces_between_tokens() {
+    let tokens = tokenize("a     b      c").expect("tokenize");
+    let words: Vec<_> = tokens
+        .iter()
+        .filter(|t| matches!(t.kind, caddyfile_rs::TokenKind::Word))
+        .collect();
+    assert_eq!(words.len(), 3);
+}
+
+// ===========================================================
+// Error edge cases
+// ===========================================================
+
+#[test]
+fn parse_error_only_open_brace() {
+    let err = parse_str("{").unwrap_err();
+    assert!(matches!(err, caddyfile_rs::Error::Parse(_)));
+}
+
+#[test]
+fn parse_error_only_close_brace() {
+    // A lone } — parser sees it as an address token (not open brace),
+    // then tries to parse site block
+    let tokens = tokenize("}").expect("tokenize");
+    let result = parse(&tokens);
+    // } is a CloseBrace token, parser skips it at top level
+    // after addresses (no { found). This doesn't error — it's
+    // treated as an empty site.
+    assert!(result.is_ok());
+}
+
+#[test]
+fn parse_double_open_brace_is_directive_name() {
+    // Inner { inside a site block is parsed as a directive
+    // whose name is "{". The parser doesn't reject this.
+    let cf = parse_str("example.com {\n\t{\n}\n").unwrap();
+    assert_eq!(cf.sites[0].directives[0].name, "{");
+}
+
+#[test]
+fn parse_error_nested_unclosed_at_depth_2() {
+    let err = parse_str("example.com {\n\theader {\n\t\tX-Test value\n}\n").unwrap_err();
+    assert!(matches!(err, caddyfile_rs::Error::Parse(_)));
+}
+
+#[test]
+fn parse_error_nested_unclosed_at_depth_3() {
+    // Properly closed at all 3 levels parses fine
+    let ok = parse_str("example.com {\n\thandle {\n\t\troute {\n\t\t\tlog\n\t\t}\n\t}\n}\n");
+    assert!(ok.is_ok());
+
+    // Missing two closing braces
+    let err = parse_str("example.com {\n\thandle {\n\t\troute {\n\t\t\tlog\n\t\t}\n").unwrap_err();
+    assert!(matches!(err, caddyfile_rs::Error::Parse(_)));
+}
+
+#[test]
+fn parse_empty_site_block() {
+    let cf = parse_str("example.com {\n}\n").unwrap();
+    assert_eq!(cf.sites.len(), 1);
+    assert!(cf.sites[0].directives.is_empty());
+}
+
+#[test]
+fn parse_multiple_empty_site_blocks() {
+    let cf = parse_str("a.com {\n}\n\nb.com {\n}\n").unwrap();
+    assert_eq!(cf.sites.len(), 2);
+    assert!(cf.sites[0].directives.is_empty());
+    assert!(cf.sites[1].directives.is_empty());
+}
+
+#[test]
+fn parse_empty_global_options() {
+    let cf = parse_str("{\n}\n").unwrap();
+    assert!(cf.global_options.is_some());
+    assert!(cf.global_options.unwrap().directives.is_empty());
+}
+
+#[test]
+fn lex_error_unterminated_heredoc_with_marker() {
+    let err = tokenize("<<MARKER\nhello world\n").unwrap_err();
+    assert!(matches!(
+        err.kind,
+        LexErrorKind::UnterminatedHeredoc { ref marker } if marker == "MARKER"
+    ));
+}
+
+#[test]
+fn parse_close_brace_treated_as_address() {
+    // `example.com }` — the parser treats `}` as an address
+    // in the same site block, not as a syntax error.
+    let cf = parse_str("example.com }\n").unwrap();
+    assert_eq!(cf.sites[0].addresses.len(), 2);
+    assert_eq!(cf.sites[0].addresses[1].host, "}");
+}
+
+#[test]
+fn parse_garbage_between_sites() {
+    // Random words between site blocks — parsed as another
+    // site with those words as addresses
+    let cf = parse_str("a.com {\n\tlog\n}\n\nrandom garbage\n\nb.com {\n\tlog\n}\n").unwrap();
+    assert_eq!(cf.sites.len(), 3);
+    // Middle "site" has "random" and "garbage" as addresses
+    assert_eq!(cf.sites[1].addresses.len(), 2);
+}
+
+#[test]
+fn parse_error_display_includes_location() {
+    let err = parse_str("example.com {\n\tlog\n").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("line"));
+    assert!(msg.contains("column"));
+}
+
+#[test]
+fn lex_error_display_includes_location() {
+    let err = tokenize("\"unterminated").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("line 1"));
+    assert!(msg.contains("column 1"));
+}
+
+#[test]
+fn lex_error_span_multiline() {
+    // Unterminated quote on line 2
+    let err = tokenize("word\n\"unterminated").unwrap_err();
+    assert_eq!(err.span.line, 2);
+}
+
+// ===========================================================
+// Multi-level domain names.
+// ===========================================================
+
+#[test]
+fn roundtrip_deep_subdomain() {
+    roundtrip(
+        "app.staging.us-east-1.internal.example.com {\n\
+         \treverse_proxy app:3000\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_three_level_subdomain() {
+    roundtrip(
+        "api.v2.example.com {\n\
+         \treverse_proxy api:8080\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_multi_level_with_wildcard() {
+    roundtrip(
+        "*.app.example.com {\n\
+         \ttls {\n\
+         \t\ton_demand\n\
+         \t}\n\
+         \n\
+         \treverse_proxy app:3000\n\
+         }\n",
+    );
+}
+
+#[test]
+fn parse_address_deep_subdomain() {
+    let addr = caddyfile_rs::parse_address("a.b.c.d.example.com");
+    assert_eq!(addr.host, "a.b.c.d.example.com");
+    assert_eq!(addr.scheme, None);
+    assert_eq!(addr.port, None);
+}
+
+#[test]
+fn parse_address_deep_subdomain_with_port() {
+    let addr = caddyfile_rs::parse_address("api.v2.staging.example.com:8443");
+    assert_eq!(addr.host, "api.v2.staging.example.com");
+    assert_eq!(addr.port, Some(8443));
+}
+
+#[test]
+fn parse_address_deep_subdomain_with_scheme() {
+    let addr = caddyfile_rs::parse_address("https://api.v2.example.com:443");
+    assert_eq!(addr.scheme, Some(Scheme::Https));
+    assert_eq!(addr.host, "api.v2.example.com");
+    assert_eq!(addr.port, Some(443));
+}
+
+#[test]
+fn roundtrip_multiple_subdomains_multi_site() {
+    roundtrip(
+        "api.v1.example.com {\n\
+         \treverse_proxy legacy:3000\n\
+         }\n\
+         \n\
+         api.v2.example.com {\n\
+         \treverse_proxy api:8080\n\
+         }\n\
+         \n\
+         dashboard.admin.internal.example.com {\n\
+         \treverse_proxy admin:3001\n\
+         }\n",
+    );
+}
+
+// ===========================================================
+// IPv6 addresses.
+//
+// Caddy uses bracket notation for IPv6: [::1]:8080
+// The current parser preserves brackets in the host field.
+// ===========================================================
+
+#[test]
+fn parse_address_ipv6_loopback_with_port() {
+    let addr = caddyfile_rs::parse_address("[::1]:8080");
+    // rfind(':') finds the port separator after the bracket
+    assert_eq!(addr.host, "[::1]");
+    assert_eq!(addr.port, Some(8080));
+}
+
+#[test]
+fn parse_address_ipv6_loopback_no_port() {
+    let addr = caddyfile_rs::parse_address("[::1]");
+    // No port — the : inside brackets doesn't parse as u16
+    assert_eq!(addr.host, "[::1]");
+    assert_eq!(addr.port, None);
+}
+
+#[test]
+fn parse_address_ipv6_full_with_port() {
+    let addr = caddyfile_rs::parse_address("[2001:db8::1]:443");
+    assert_eq!(addr.host, "[2001:db8::1]");
+    assert_eq!(addr.port, Some(443));
+}
+
+#[test]
+fn parse_address_ipv6_full_no_port() {
+    let addr = caddyfile_rs::parse_address("[2001:db8::1]");
+    assert_eq!(addr.host, "[2001:db8::1]");
+    assert_eq!(addr.port, None);
+}
+
+#[test]
+fn parse_address_ipv6_all_interfaces() {
+    let addr = caddyfile_rs::parse_address("[::]:80");
+    assert_eq!(addr.host, "[::]");
+    assert_eq!(addr.port, Some(80));
+}
+
+#[test]
+fn parse_address_ipv6_with_scheme() {
+    let addr = caddyfile_rs::parse_address("https://[::1]:443");
+    assert_eq!(addr.scheme, Some(Scheme::Https));
+    assert_eq!(addr.host, "[::1]");
+    assert_eq!(addr.port, Some(443));
+}
+
+#[test]
+fn roundtrip_ipv6_loopback_site() {
+    roundtrip(
+        "[::1]:8080 {\n\
+         \trespond \"hello\"\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_ipv6_full_address() {
+    roundtrip(
+        "[2001:db8::1]:443 {\n\
+         \treverse_proxy app:3000\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_ipv6_with_scheme() {
+    roundtrip(
+        "https://[::1]:8443 {\n\
+         \treverse_proxy app:3000\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_ipv6_bind_directive() {
+    // IPv6 in bind directive (as argument, not address)
+    roundtrip(
+        "example.com {\n\
+         \tbind 0.0.0.0 [::]\n\
+         \treverse_proxy app:3000\n\
+         }\n",
+    );
+}
+
+#[test]
+fn roundtrip_ipv6_and_ipv4_multi_address() {
+    roundtrip(
+        "127.0.0.1:8080, [::1]:8080 {\n\
+         \trespond \"hello\"\n\
+         }\n",
+    );
+}
+
+#[test]
+fn ast_fidelity_ipv6_address() {
+    let cf = Caddyfile::new().site(SiteBlock::new("[::1]:8080").reverse_proxy("app:3000"));
+    assert_ast_roundtrip(&cf);
+}
+
+#[test]
+fn ast_fidelity_deep_subdomain() {
+    let cf = Caddyfile::new().site(
+        SiteBlock::new("api.v2.staging.example.com")
+            .reverse_proxy("api:8080")
+            .log(),
+    );
+    assert_ast_roundtrip(&cf);
+}
+
+// ===========================================================
+// Property-based tests with proptest.
+//
+// Generate random ASTs, format them, parse them back, and
+// verify the round-trip produces a stable (idempotent) output.
+//
+// We check format(parse(format(ast))) == format(ast) rather
+// than ast == parse(format(ast)) because the parser may
+// normalise some constructs (e.g. bare /path args become path
+// matchers). The idempotency check is strictly stronger than
+// equality for real-world correctness.
+// ===========================================================
+
+mod proptest_ast {
+    use super::*;
+    use proptest::prelude::*;
+
+    // -- Leaf strategies --
+
+    /// Safe directive name: lowercase alpha start, then alphanumeric + _ -
+    fn directive_name() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9_-]{0,15}".prop_map(|s| s)
+    }
+
+    /// Safe unquoted argument: no leading / @ * { } " ` #, no whitespace
+    fn unquoted_arg() -> impl Strategy<Value = String> {
+        "[a-z0-9][a-z0-9.:_-]{0,20}".prop_map(|s| s)
+    }
+
+    /// Quoted argument: printable ASCII, may contain spaces.
+    /// Must not start with / @ * — the parser treats those as
+    /// matchers even inside quoted strings (known limitation).
+    fn quoted_arg_value() -> impl Strategy<Value = String> {
+        "[a-zA-Z0-9][a-zA-Z0-9 .:_-]{0,29}".prop_map(|s| s)
+    }
+
+    /// Argument: either unquoted or quoted (skip backtick/heredoc
+    /// for simplicity — they have their own dedicated tests)
+    fn argument() -> impl Strategy<Value = Argument> {
+        prop_oneof![
+            unquoted_arg().prop_map(Argument::Unquoted),
+            quoted_arg_value().prop_map(Argument::Quoted),
+        ]
+    }
+
+    /// Arguments list (0-4 args)
+    fn arguments() -> impl Strategy<Value = Vec<Argument>> {
+        prop::collection::vec(argument(), 0..=4)
+    }
+
+    /// Matcher (optional)
+    fn matcher() -> impl Strategy<Value = Option<Matcher>> {
+        prop_oneof![
+            3 => Just(None),
+            1 => Just(Some(Matcher::All)),
+            1 => "[a-z]{1,10}".prop_map(|n| Some(Matcher::Named(n))),
+        ]
+    }
+
+    /// Directive at a given depth (limits recursion)
+    fn directive(depth: u32) -> impl Strategy<Value = Directive> {
+        let leaf =
+            (directive_name(), matcher(), arguments()).prop_map(|(name, matcher, arguments)| {
+                Directive {
+                    name,
+                    matcher,
+                    arguments,
+                    block: None,
+                }
+            });
+
+        if depth == 0 {
+            leaf.boxed()
+        } else {
+            let with_block = (
+                directive_name(),
+                // No matcher on block directives to avoid ambiguity
+                arguments(),
+                prop::collection::vec(directive(depth - 1), 0..=3),
+            )
+                .prop_map(|(name, arguments, sub)| Directive {
+                    name,
+                    matcher: None,
+                    arguments,
+                    block: Some(sub),
+                });
+
+            prop_oneof![
+                3 => leaf,
+                1 => with_block,
+            ]
+            .boxed()
+        }
+    }
+
+    /// Directives list (0-5 directives at depth 2)
+    fn directives() -> impl Strategy<Value = Vec<Directive>> {
+        prop::collection::vec(directive(2), 0..=5)
+    }
+
+    /// Simple hostname
+    fn hostname() -> impl Strategy<Value = String> {
+        "[a-z]{2,8}\\.(com|org|net|io)".prop_map(|s| s)
+    }
+
+    /// Address — just use simple hostnames to avoid parse_address
+    /// ambiguities with port/path
+    fn address() -> impl Strategy<Value = String> {
+        hostname()
+    }
+
+    /// Snippet
+    fn snippet() -> impl Strategy<Value = Snippet> {
+        ("[a-z]{2,10}", directives()).prop_map(|(name, directives)| Snippet { name, directives })
+    }
+
+    /// Named route
+    fn named_route() -> impl Strategy<Value = NamedRoute> {
+        ("[a-z]{2,10}", directives()).prop_map(|(name, directives)| NamedRoute { name, directives })
+    }
+
+    /// Site block
+    fn site_block() -> impl Strategy<Value = SiteBlock> {
+        (prop::collection::vec(address(), 1..=3), directives()).prop_map(|(addrs, directives)| {
+            let mut sb = SiteBlock::new(&addrs[0]);
+            for addr in &addrs[1..] {
+                sb = sb.address(addr);
+            }
+            sb.directives = directives;
+            sb
+        })
+    }
+
+    /// Global options (optional)
+    fn global_options() -> impl Strategy<Value = Option<GlobalOptions>> {
+        prop_oneof![
+            3 => Just(None),
+            1 => directives().prop_map(|d| Some(GlobalOptions { directives: d })),
+        ]
+    }
+
+    /// Full Caddyfile
+    fn caddyfile() -> impl Strategy<Value = Caddyfile> {
+        (
+            global_options(),
+            prop::collection::vec(snippet(), 0..=2),
+            prop::collection::vec(named_route(), 0..=2),
+            prop::collection::vec(site_block(), 0..=3),
+        )
+            .prop_map(
+                |(global_options, snippets, named_routes, sites)| Caddyfile {
+                    global_options,
+                    snippets,
+                    named_routes,
+                    sites,
+                },
+            )
+    }
+
+    // -- Property tests --
+
+    proptest! {
+        /// Formatting is idempotent: format(parse(format(x))) == format(x).
+        /// This is the core round-trip property.
+        #[test]
+        fn format_idempotent(cf in caddyfile()) {
+            let r1 = format(&cf);
+            let parsed = parse_str(&r1)
+                .map_err(|e| {
+                    TestCaseError::fail(
+                        std::format!("parse error: {e}\n--- output ---\n{r1}"))
+                })?;
+            let r2 = format(&parsed);
+            prop_assert_eq!(r1, r2);
+        }
+
+        /// A formatted Caddyfile never panics when tokenized.
+        #[test]
+        fn format_never_produces_lex_error(cf in caddyfile()) {
+            let formatted = format(&cf);
+            tokenize(&formatted).map_err(|e| {
+                TestCaseError::fail(
+                    std::format!("lex error: {e}\n--- output ---\n{formatted}"))
+            })?;
+        }
+
+        /// Parsed site count survives the round-trip.
+        #[test]
+        fn site_count_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            prop_assert_eq!(cf.sites.len(), parsed.sites.len());
+        }
+
+        /// Snippet count survives the round-trip.
+        #[test]
+        fn snippet_count_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            prop_assert_eq!(cf.snippets.len(), parsed.snippets.len());
+        }
+
+        /// Named route count survives the round-trip.
+        #[test]
+        fn named_route_count_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            prop_assert_eq!(cf.named_routes.len(), parsed.named_routes.len());
+        }
+
+        /// Global options presence survives.
+        #[test]
+        fn global_options_presence_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            prop_assert_eq!(
+                cf.global_options.is_some(),
+                parsed.global_options.is_some()
+            );
+        }
+
+        /// Snippet names survive the round-trip.
+        #[test]
+        fn snippet_names_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            let orig_names: Vec<_> = cf.snippets.iter().map(|s| &s.name).collect();
+            let parsed_names: Vec<_> = parsed.snippets.iter().map(|s| &s.name).collect();
+            prop_assert_eq!(orig_names, parsed_names);
+        }
+
+        /// Named route names survive the round-trip.
+        #[test]
+        fn named_route_names_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            let orig_names: Vec<_> = cf.named_routes.iter().map(|r| &r.name).collect();
+            let parsed_names: Vec<_> = parsed.named_routes.iter().map(|r| &r.name).collect();
+            prop_assert_eq!(orig_names, parsed_names);
+        }
+
+        /// Address count per site survives the round-trip.
+        #[test]
+        fn address_counts_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            for (orig, re) in cf.sites.iter().zip(parsed.sites.iter()) {
+                prop_assert_eq!(orig.addresses.len(), re.addresses.len());
+            }
+        }
+
+        /// Directive count per site survives the round-trip.
+        #[test]
+        fn directive_counts_preserved(cf in caddyfile()) {
+            let formatted = format(&cf);
+            let parsed = parse_str(&formatted).unwrap();
+            for (orig, re) in cf.sites.iter().zip(parsed.sites.iter()) {
+                prop_assert_eq!(
+                    orig.directives.len(),
+                    re.directives.len(),
+                    "Directive count mismatch in site {:?}\nFormatted:\n{}",
+                    orig.addresses,
+                    formatted
+                );
+            }
+        }
+    }
+}

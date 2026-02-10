@@ -1,3 +1,7 @@
+//! Parser that transforms a token stream into a Caddyfile AST.
+//!
+//! Recognizes global options, snippets, named routes, and site blocks.
+
 use std::fmt;
 
 use crate::ast::{

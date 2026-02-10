@@ -1,3 +1,7 @@
+//! Token types and source spans produced by the lexer.
+//!
+//! Used as the intermediate representation between lexing and parsing.
+
 /// Source location for error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {

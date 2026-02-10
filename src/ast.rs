@@ -1,3 +1,7 @@
+//! Abstract syntax tree types representing a parsed Caddyfile.
+//!
+//! Includes site blocks, directives, matchers, snippets, and global options.
+
 use std::fmt;
 
 /// Complete Caddyfile document.

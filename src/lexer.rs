@@ -1,3 +1,7 @@
+//! Tokenizer that converts raw Caddyfile source text into a stream of tokens.
+//!
+//! Handles strings, braces, comments, and whitespace-delimited words.
+
 use std::fmt;
 
 use crate::token::{Span, Token, TokenKind};
