@@ -18,7 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install caddyfile CLI
-        run: cargo install caddyfile-rs
+        run: cargo install --path .
       - name: Validate Caddyfile
         run: caddyfile validate testdata/Caddyfile
       - name: Check formatting
