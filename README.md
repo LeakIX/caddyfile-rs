@@ -18,7 +18,7 @@ the [Caddy](https://caddyserver.com/) web server.
 Install the `caddyfile` command-line tool:
 
 ```sh
-cargo install caddyfile-rs
+cargo install --git https://github.com/LeakIX/caddyfile-rs
 ```
 
 ### Validate
@@ -62,7 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install caddyfile CLI
-        run: cargo install caddyfile-rs
+        run: cargo install --git https://github.com/LeakIX/caddyfile-rs
       - name: Validate Caddyfile
         run: caddyfile validate Caddyfile
       - name: Check formatting
