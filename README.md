@@ -1,7 +1,7 @@
 # caddyfile-rs
 
 [![crates.io](https://img.shields.io/crates/v/caddyfile-rs.svg)](https://crates.io/crates/caddyfile-rs)
-[![docs.rs](https://docs.rs/caddyfile-rs/badge.svg)](https://docs.rs/caddyfile-rs)
+[![docs](https://img.shields.io/badge/docs-rustdoc-blue)](https://leakix.github.io/caddyfile-rs/)
 
 A Rust library for parsing, formatting, and building
 [Caddyfile](https://caddyserver.com/docs/caddyfile) configuration files for
@@ -74,7 +74,7 @@ jobs:
 
 ## Documentation
 
-See the full API reference on [docs.rs](https://docs.rs/caddyfile-rs).
+See the full API reference on [leakix.github.io/caddyfile-rs](https://leakix.github.io/caddyfile-rs/).
 
 ## License
 
