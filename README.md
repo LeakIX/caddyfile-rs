@@ -1,5 +1,8 @@
 # caddyfile-rs
 
+[![crates.io](https://img.shields.io/crates/v/caddyfile-rs.svg)](https://crates.io/crates/caddyfile-rs)
+[![docs.rs](https://docs.rs/caddyfile-rs/badge.svg)](https://docs.rs/caddyfile-rs)
+
 A Rust library for parsing, formatting, and building
 [Caddyfile](https://caddyserver.com/docs/caddyfile) configuration files for
 the [Caddy](https://caddyserver.com/) web server.
