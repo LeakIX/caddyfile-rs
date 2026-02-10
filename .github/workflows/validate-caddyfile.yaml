@@ -17,9 +17,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build caddyfile CLI
-        run: cargo build --release
-      - name: Validate sample Caddyfile
-        run: ./target/release/caddyfile validate testdata/Caddyfile
+      - name: Install caddyfile CLI
+        run: cargo install caddyfile-rs
+      - name: Validate Caddyfile
+        run: caddyfile validate testdata/Caddyfile
       - name: Check formatting
-        run: ./target/release/caddyfile check testdata/Caddyfile
+        run: caddyfile check testdata/Caddyfile

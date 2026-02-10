@@ -41,20 +41,28 @@ caddyfile check Caddyfile
 
 ### GitHub Actions
 
-Add a workflow to validate your Caddyfile on every push:
+Add a workflow to validate your Caddyfile on every push
+(see [validate-caddyfile.yaml](.github/workflows/validate-caddyfile.yaml)):
 
 ```yaml
 name: Validate Caddyfile
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   validate:
+    name: Validate Caddyfile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install caddyfile-rs
+      - uses: Swatinem/rust-cache@v2
+      - name: Install caddyfile CLI
+        run: cargo install caddyfile-rs
       - name: Validate Caddyfile
         run: caddyfile validate Caddyfile
       - name: Check formatting
