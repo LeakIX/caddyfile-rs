@@ -301,7 +301,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn skip_newlines_and_comments(&mut self) {
+    const fn skip_newlines_and_comments(&mut self) {
         while self.pos < self.tokens.len() {
             match self.tokens[self.pos].kind {
                 TokenKind::Newline | TokenKind::Comment => {
