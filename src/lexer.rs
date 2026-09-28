@@ -187,7 +187,8 @@ impl<'a> Lexer<'a> {
         self.input.get(self.pos + offset).copied()
     }
 
-    const fn advance(&mut self) {
+    #[allow(clippy::missing_const_for_fn)]
+    fn advance(&mut self) {
         if self.pos < self.input.len() {
             if self.input[self.pos] == b'\n' {
                 self.line += 1;

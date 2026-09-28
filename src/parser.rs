@@ -301,7 +301,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    const fn skip_newlines_and_comments(&mut self) {
+    #[allow(clippy::missing_const_for_fn)]
+    fn skip_newlines_and_comments(&mut self) {
         while self.pos < self.tokens.len() {
             match self.tokens[self.pos].kind {
                 TokenKind::Newline | TokenKind::Comment => {
